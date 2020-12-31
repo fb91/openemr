@@ -1,0 +1,171 @@
+[	
+  {
+      "label": "Calendar",
+      "menu_id": "cal0",
+      "target": "cal",
+      "url": "/interface/main/main_info.php",
+      "children": [],
+      "requirement": 0,
+      "acl_req": [
+        "patients",
+        "appt"
+      ],
+      "global_req_strict": [
+        "!disable_calendar",
+        "!ippf_specific"
+      ]
+  },
+  {
+      "label": "Messages",
+      "menu_id": "msg0",
+      "target": "msg",
+      "url": "/interface/main/messages/messages.php?form_active=1",
+      "children": [],
+      "requirement": 0,
+      "acl_req": [
+        "patients",
+        "notes"
+      ]
+  },
+  {
+    "label": "Patient/Client",
+    "menu_id": "patimg",
+    "children": [
+      {
+        "label": "Patients",
+        "menu_id": "fin0",
+        "target": "fin",
+        "url": "/interface/main/finder/dynamic_finder.php",
+        "children": [],
+        "requirement": 0,
+        "acl_req": [
+          "patients",
+          "demo"
+        ]
+      },
+      {
+        "label": "New/Search",
+        "menu_id": "new0",
+        "target": "pat",
+        "url": "/interface/new/new.php",
+        "children": [],
+        "requirement": 0,
+        "acl_req": [
+          "patients",
+          "demo",
+          "write",
+          "addonly"
+        ],
+        "global_req": "full_new_patient_form"
+      },
+      {
+        "label": "New",
+        "menu_id": "new0",
+        "target": "pat",
+        "url": "/interface/new/new.php",
+        "children": [],
+        "requirement": 0,
+        "acl_req": [
+          "patients",
+          "demo",
+          "write",
+          "addonly"
+        ],
+        "global_req": "!full_new_patient_form"
+      },
+      {
+        "label": "Dashboard{{patient file}}",
+        "menu_id": "dem1",
+        "target": "pat",
+        "url": "/interface/patient_file/summary/demographics.php",
+        "children": [],
+        "requirement": 1,
+        "acl_req": [
+          "patients",
+          "demo"
+        ]
+      },
+      {
+        "label": "Visits",
+        "icon": "fa-caret-right",
+        "children": [
+          {
+            "label": "Calendar",
+            "menu_id": "cal0",
+            "target": "cal",
+            "url": "/interface/main/main_info.php",
+            "children": [],
+            "requirement": 0,
+            "acl_req": [
+              "patients",
+              "appt"
+            ],
+            "global_req_strict": [
+              "ippf_specific",
+              "!disable_calendar"
+            ]
+          },
+          {
+            "label": "Create Visit",
+            "menu_id": "nen1",
+            "target": "enc",
+            "url": "/interface/forms/newpatient/new.php?autoloaded=1&calenc=",
+            "children": [],
+            "requirement": 1
+          },
+          {
+            "label": "Current",
+            "menu_id": "enc2",
+            "target": "enc",
+            "url": "/interface/patient_file/encounter/encounter_top.php",
+            "children": [],
+            "requirement": 3,
+            "acl_req": [
+              "patients",
+              "appt"
+            ]
+          },
+          {
+            "label": "Visit History",
+            "menu_id": "ens1",
+            "target": "enc",
+            "url": "/interface/patient_file/history/encounters.php",
+            "children": [],
+            "requirement": 1,
+            "acl_req": [
+              "patients",
+              "appt"
+            ]
+          }
+        ],
+        "requirement": 0
+      },
+      {
+        "label": "Records",
+        "icon": "fa-caret-right",
+        "children": [
+          {
+            "label": "Patient Record Request",
+            "menu_id": "prq1",
+            "target": "enc",
+            "url": "/interface/patient_file/transaction/record_request.php",
+            "children": [],
+            "requirement": 1,
+            "acl_req": [
+              "patients",
+              "med"
+            ]
+          }
+        ],
+        "requirement": 0
+      },
+      {
+        "label": "Visit Forms",
+        "icon": "fa-caret-right",
+        "children": [],
+        "requirement": 0
+      }
+    ],
+    "requirement": 0
+  }
+]
