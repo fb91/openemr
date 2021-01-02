@@ -163,7 +163,7 @@ if ($_POST['searchby'] && $_POST['searchparm']) {
         }
     </style>
 
-    <script
+    <script>
 
         function selgid(gid, name, end_date) {
             if (opener.closed || !opener.setgroup)
