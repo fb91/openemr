@@ -13,7 +13,9 @@
 
 namespace OpenEMR\Common\Auth\OpenIDConnect;
 
+use Lcobucci\JWT\Builder;
 use League\OAuth2\Server\Entities\AccessTokenEntityInterface;
+use League\OAuth2\Server\Entities\UserEntityInterface;
 use League\OAuth2\Server\Exception\OAuthServerException;
 use OpenEMR\Common\Logging\SystemLogger;
 use OpenEMR\FHIR\SMART\SmartLaunchController;
@@ -86,6 +88,10 @@ class IdTokenSMARTResponse extends IdTokenResponse
             }
         }
 
+        // response should return the scopes we authorized inside the accessToken to be smart compatible
+        // I would think this would be better put in the id_token but to be spec compliant we have to have this here
+        $extraParams['scope'] = $this->getScopeString($accessToken->getScopes());
+
         $this->logger->debug("IdTokenSMARTResponse->getExtraParams() final params", ["params" => $extraParams]);
         return $extraParams;
     }
@@ -133,5 +139,33 @@ class IdTokenSMARTResponse extends IdTokenResponse
         }
 
         return $valid;
+    }
+
+    private function getScopeString($scopes)
+    {
+        $scopeList = [];
+        foreach ($scopes as $scope) {
+            $scopeId = $scope->getIdentifier();
+            // don't include scopes like site:default
+            // they still get bundled into the AccessToken but for ONC certification
+            // it won't allow custom scope permissions even though this is valid per Open ID Connect spec
+            // so we will just skip listing in the 'scopes' response that is sent back to
+            // the client.
+            if (strpos($scopeId, ':') === false) {
+                $scopeList[] = $scopeId;
+            }
+        }
+        return implode(' ', $scopeList);
+    }
+
+    protected function getBuilder(AccessTokenEntityInterface $accessToken, UserEntityInterface $userEntity): Builder
+    {
+        // Add required id_token claims
+        return (new Builder())
+            ->permittedFor($accessToken->getClient()->getIdentifier())
+            ->issuedBy($GLOBALS['site_addr_oath'] . $GLOBALS['webroot'] . "/oauth2/" . $_SESSION['site_id'])
+            ->issuedAt(new \DateTimeImmutable('@' . time()))
+            ->expiresAt(new \DateTimeImmutable('@' . $accessToken->getExpiryDateTime()->getTimestamp()))
+            ->relatedTo($userEntity->getIdentifier());
     }
 }

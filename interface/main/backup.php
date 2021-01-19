@@ -199,7 +199,7 @@ if ($form_step == 0) {
     echo "  <td>" . xlt('Create Eventlog Backup') . "</td>\n";
     echo " </tr>\n";
     echo " <tr>\n";
-    echo "  <td></td><td class='text'>" . xlt('Note that the Eventlog Backup is currently set to save in the following folder:') . " " . text($GLOBALS['backup_log_dir']) . " . " . xlt('Recommend setting the Path for Event Log Backup in Globals settings in the Miscellaneous section to something other than your tmp/temp directory.') . " " . xlt('Please refer to') . ' README-Log-Backup.txt ' . xlt('file in the Documentation directory to learn how to automate the process of creating log backups') . ".</td>\n";
+    echo "  <td></td><td class='text'>" . xlt('Note that the Eventlog Backup is currently set to save in the following folder') . ": " . text($GLOBALS['backup_log_dir']) . " . " . xlt('Recommend setting the Path for Event Log Backup in Globals settings in the Miscellaneous section to something other than your tmp/temp directory.') . " " . xlt('Please refer to') . ' README-Log-Backup.txt ' . xlt('file in the Documentation directory to learn how to automate the process of creating log backups') . ".</td>\n";
     echo " </tr>\n";
     echo "</table>\n";
 }
@@ -461,14 +461,17 @@ if ($form_step == 102) {
                     $cmd .= "echo 'DELETE FROM list_options WHERE list_id = \"" . add_escape_custom($listid) . "\";' >> " . escapeshellarg($EXPORT_FILE) . ";";
                     $cmd .= "echo 'DELETE FROM list_options WHERE list_id = \"lists\" AND option_id = \"" . add_escape_custom($listid) . "\";' >> " . escapeshellarg($EXPORT_FILE) . ";";
                 }
-                $cmd .= $dumppfx .
-                " --where='list_id = \"lists\" AND option_id = \"" . add_escape_custom($listid) . "\" OR list_id = \"" . add_escape_custom($listid) . "\" " .
-                "ORDER BY list_id != \"lists\", seq, title' " .
-                escapeshellarg($sqlconf["dbase"]) . " list_options";
                 if (IS_WINDOWS) {
-                  # windows uses the & to join statements.
+                    # windows uses the & to join statements.
+                    $cmd .= $dumppfx . " --where=\"list_id = 'lists' AND option_id = '$listid' OR list_id = '$listid' " .
+                        "ORDER BY list_id != 'lists', seq, title\" " .
+                        escapeshellarg($sqlconf["dbase"]) . " list_options";
                     $cmd .=  " >> " . escapeshellarg($EXPORT_FILE) . " & ";
                 } else {
+                    $cmd .= $dumppfx . " --where='list_id = \"lists\" AND option_id = \"" .
+                        add_escape_custom($listid) . "\" OR list_id = \"" .
+                        add_escape_custom($listid) . "\" " . "ORDER BY list_id != \"lists\", seq, title' " .
+                        escapeshellarg($sqlconf["dbase"]) . " list_options";
                     $cmd .=  " >> " . escapeshellarg($EXPORT_FILE) . ";";
                 }
             }
@@ -501,23 +504,21 @@ if ($form_step == 102) {
                 } else {
                     $cmd .= "echo 'DELETE FROM layout_group_properties WHERE grp_form_id = \"" . add_escape_custom($layoutid) . "\";' >> " . escapeshellarg($EXPORT_FILE) . ";";
                 }
-                $cmd .= $dumppfx .
-                    " --where='grp_form_id = \"" . add_escape_custom($layoutid) . "\"' " .
-                    escapeshellarg($sqlconf["dbase"]) . " layout_group_properties";
                 if (IS_WINDOWS) {
                     # windows uses the & to join statements.
+                    $cmd .= $dumppfx . ' --where="grp_form_id = \'' . add_escape_custom($layoutid) . "'\" " .
+                        escapeshellarg($sqlconf["dbase"]) . " layout_group_properties";
+                    $cmd .= " >> " . escapeshellarg($EXPORT_FILE) . " & ";
+                    $cmd .= $dumppfx . ' --where="form_id = \'' . add_escape_custom($layoutid) . '\' ORDER BY group_id, seq, title" '  .
+                        escapeshellarg($sqlconf["dbase"]) . " layout_options" ;
                     $cmd .= " >> " . escapeshellarg($EXPORT_FILE) . " & ";
                 } else {
+                    $cmd .= $dumppfx . " --where='grp_form_id = \"" . add_escape_custom($layoutid) . "\"' " .
+                        escapeshellarg($sqlconf["dbase"]) . " layout_group_properties";
                     $cmd .= " >> " . escapeshellarg($EXPORT_FILE) . ";";
-                }
-                $cmd .= $dumppfx .
-                " --where='form_id = \"" . add_escape_custom($layoutid) . "\" ORDER BY group_id, seq, title' " .
-                escapeshellarg($sqlconf["dbase"]) . " layout_options" ;
-                if (IS_WINDOWS) {
-                    # windows uses the & to join statements.
-                    $cmd .=  " >> " . escapeshellarg($EXPORT_FILE) . " & ";
-                } else {
-                    $cmd .=  " >> " . escapeshellarg($EXPORT_FILE) . ";";
+                    $cmd .= $dumppfx . " --where='form_id = \"" . add_escape_custom($layoutid) . "\" ORDER BY group_id, seq, title' " .
+                        escapeshellarg($sqlconf["dbase"]) . " layout_options" ;
+                    $cmd .= " >> " . escapeshellarg($EXPORT_FILE) . ";";
                 }
             }
         }

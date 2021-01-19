@@ -17,6 +17,7 @@ use League\OAuth2\Server\Exception\OAuthServerException;
 use OpenEMR\Common\Auth\AuthUtils;
 use OpenEMR\Common\Auth\MfaUtils;
 use OpenEMR\Common\Auth\UuidUserAccount;
+use OpenEMR\Common\Logging\SystemLogger;
 use OpenEMR\Common\Uuid\UuidRegistry;
 use OpenIDConnectServer\Entities\ClaimSetInterface;
 
@@ -28,9 +29,25 @@ class UserEntity implements ClaimSetInterface, UserEntityInterface
 
     public function getClaims()
     {
-        $claimsType = ($_REQUEST['grant_type'] === 'client_credentials') ? 'client' : 'oidc';
+        $claimsType = (!empty($_REQUEST['grant_type']) && ($_REQUEST['grant_type'] === 'client_credentials')) ? 'client' : 'oidc';
         if ($claimsType === 'oidc') {
             $uuidToUser = new UuidUserAccount($this->identifier);
+            $fhirUser = '';
+            $userRole = $uuidToUser->getUserRole();
+            if ($userRole == 'users') {
+                // TODO: adunsulag check with brady/sjpadget on whether this should be Practioner or Person, it has to
+                // be one of those resource types and you have to be able to retrieve it via a FHIR endpoint but I'm not
+                // sure a site admin is classified as a 'practioner'.
+                // TODO: adunsulag we should see if there is a better way like FHIRRouteResolver for a given resource endpoint...
+                $fhirUser = $GLOBALS['site_addr_oath'] . $GLOBALS['web_root'] . '/apis/' . $_SESSION['site_id'] . "/fhir/Practitioner/" . $this->identifier;
+            } else if ($userRole == 'patients') {
+                $fhirUser = $GLOBALS['site_addr_oath'] . $GLOBALS['web_root'] . '/apis/' . $_SESSION['site_id'] . "/fhir/Patient/" . $this->identifier;
+            } else {
+                SystemLogger::instance()->error("user role not supported for fhirUser claim ", ['role' => $userRole]);
+            }
+
+            SystemLogger::instance()->debug("fhirUser claim is ", ['role' => $userRole, 'fhirUser' => $fhirUser]);
+
             $user = $uuidToUser->getUserAccount();
             if (empty($user)) {
                 $user = false;
@@ -41,7 +58,7 @@ class UserEntity implements ClaimSetInterface, UserEntityInterface
                 'given_name' => $user['firstname'],
                 'middle_name' => $user['middlename'],
                 'nickname' => '',
-                'preferred_username' => $user['username'],
+                'preferred_username' => $user['username'] ?? '',
                 'profile' => '',
                 'picture' => '',
                 'website' => '',
@@ -56,7 +73,7 @@ class UserEntity implements ClaimSetInterface, UserEntityInterface
                 'phone_number_verified' => true,
                 'address' => $user['street'] . ' ' . $user['city'] . ' ' . $user['state'],
                 'zip' => $user['zip'],
-                'fhirUser' => true,
+                'fhirUser' => $fhirUser,
                 'api:fhir' => true,
                 'api:oemr' => true,
                 'api:port' => true,
@@ -65,7 +82,7 @@ class UserEntity implements ClaimSetInterface, UserEntityInterface
         }
         if ($claimsType === 'client') {
             $claims = [
-                'fhirUser' => true,
+                'fhirUser' => $fhirUser,
                 'api:fhir' => true,
                 'api:oemr' => true,
                 'api:port' => true,
@@ -106,30 +123,34 @@ class UserEntity implements ClaimSetInterface, UserEntityInterface
                 }
                 $this->setIdentifier(UuidRegistry::uuidToString($uuid));
 
-                //check if TOTP MFA required (U2F impossible to support via password grant)
+                // If an mfa_token was provided, then will force TOTP MFA (U2F impossible to support via password grant)
+                //  (note that this is only forced if mfa_token is provided)
                 $mfa = new MfaUtils($id);
                 $mfaToken = $mfa->tokenFromRequest(MfaUtils::TOTP);
-                if ($mfa->isMfaRequired() && in_array(MfaUtils::TOTP, $mfa->getType()) && is_null($mfaToken)) {
-                    throw new OAuthServerException(
-                        'MFA required, The authorization server expects to `mfa_token` parameter in the request body.',
-                        11,
-                        'mfa_required',
-                        403
-                    );
-                }
-                //Check the validity of the authentication token
-                if ($mfa->isMfaRequired() && in_array(MfaUtils::TOTP, $mfa->getType()) && !is_null($mfaToken)) {
-                    if ($mfaToken && $mfa->check($mfaToken, MfaUtils::TOTP)) {
-                        return true;
-                    } else {
+                if (!is_null($mfaToken)) {
+                    if (!$mfa->isMfaRequired() || !in_array(MfaUtils::TOTP, $mfa->getType())) {
+                        // A mfa_token was provided, however the user is not configured for totp
                         throw new OAuthServerException(
-                            $mfa->errorMessage(),
-                            12,
-                            'mfa_token_invalid',
-                            401
+                            'MFA not supported.',
+                            11,
+                            'mfa_not_supported',
+                            403
                         );
+                    } else {
+                        //Check the validity of the totp token, if applicable
+                        if (!empty($mfaToken) && $mfa->check($mfaToken, MfaUtils::TOTP)) {
+                            return true;
+                        } else {
+                            throw new OAuthServerException(
+                                $mfa->errorMessage(),
+                                12,
+                                'mfa_token_invalid',
+                                401
+                            );
+                        }
                     }
                 }
+
                 return true;
             }
         } elseif (($userrole == "patient") && (($GLOBALS['oauth_password_grant'] == 2) || ($GLOBALS['oauth_password_grant'] == 3))) {

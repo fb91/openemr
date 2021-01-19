@@ -24,6 +24,14 @@ class ClientEntity implements ClientEntityInterface
     protected $userId;
     protected $clientRole;
     protected $scopes;
+    protected $launchUri;
+
+    /**
+     * Confidential apps or apps with a 'launch' scope must be manually authorized by an adminstrator before their
+     * client can be used.
+     * @var bool
+     */
+    protected $isEnabled;
 
     public function __construct()
     {
@@ -43,6 +51,16 @@ class ClientEntity implements ClientEntityInterface
     public function setIsConfidential($set): void
     {
         $this->isConfidential = $set;
+    }
+
+    public function setIsEnabled($set): void
+    {
+        $this->isEnabled = $set === 1 || $set === true;
+    }
+
+    public function isEnabled(): bool
+    {
+        return $this->isEnabled;
     }
 
     public function setUserId($id): void
@@ -92,6 +110,23 @@ class ClientEntity implements ClientEntityInterface
      */
     public function hasScope($scope)
     {
-        return array_search($scope, $this->scopes) !== false;
+        return in_array($scope, $this->scopes);
+    }
+
+    /**
+     * Returns the registered launch URI (as a string).
+     *
+     * @params $launchParams string A URL query string params to append to the launch uri.
+     * @return string
+     */
+    public function getLaunchUri($launchParams = '')
+    {
+        $launchParams = isset($launchParams) ? $launchParams : '';
+        return $this->launchUri . $launchParams;
+    }
+
+    public function setLaunchUri($uri): void
+    {
+        $this->launchUri = $uri;
     }
 }

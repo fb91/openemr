@@ -45,6 +45,7 @@
 //   Italian                        // xl('Italian')
 //   Japanese                       // xl('Japanese')
 //   Korean                         // xl('Korean')
+//   Lao                            // xl('Lao')
 //   Lithuanian                     // xl('Lithuanian')
 //   Marathi                        // xl('Marathi')
 //   Mongolian                      // xl('Mongolian')
@@ -2672,6 +2673,16 @@ $GLOBALS_METADATA = array(
             xl('Individual pages can override 2nd and 3rd options by implementing a log message.')
         ),
 
+        'system_error_logging' => array(
+            xl('System Error Logging Options'),
+            array(
+                'WARNING' => xl('Standard Error Logging'),
+                'DEBUG' => xl('Debug Error Logging'),
+            ),
+            'WARNING',                        // default
+            xl('System Error Logging Options.')
+        ),
+
     ),
 
     // Miscellaneous Tab
@@ -2928,14 +2939,14 @@ $GLOBALS_METADATA = array(
         ),
 
         'rest_portal_api' => array(
-            xl('Enable OpenEMR Patient Portal REST API'),
+            xl('Enable OpenEMR Patient Portal REST API (EXPERIMENTAL)'),
             'bool',
             '0',
             xl('Enable OpenEMR Patient Portal RESTful API.')
         ),
 
         'rest_portal_fhir_api' => array(
-            xl('Enable OpenEMR Patient Portal FHIR REST API'),
+            xl('Enable OpenEMR Patient Portal FHIR REST API (EXPERIMENTAL)'),
             'bool',
             '0',
             xl('Enable OpenEMR Patient Portal FHIR RESTful API.')

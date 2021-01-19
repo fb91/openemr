@@ -37,6 +37,7 @@ use OpenEMR\Common\Auth\OpenIDConnect\Entities\ClientEntity;
 use OpenEMR\Common\Auth\OpenIDConnect\Entities\ScopeEntity;
 use OpenEMR\Common\Auth\OpenIDConnect\Entities\UserEntity;
 use OpenEMR\Common\Auth\OpenIDConnect\Grant\CustomPasswordGrant;
+use OpenEMR\Common\Auth\OpenIDConnect\Grant\CustomRefreshTokenGrant;
 use OpenEMR\Common\Auth\OpenIDConnect\IdTokenSMARTResponse;
 use OpenEMR\Common\Auth\OpenIDConnect\Repositories\AccessTokenRepository;
 use OpenEMR\Common\Auth\OpenIDConnect\Repositories\AuthCodeRepository;
@@ -51,9 +52,9 @@ use OpenEMR\Common\Logging\SystemLogger;
 use OpenEMR\Common\Session\SessionUtil;
 use OpenEMR\Common\Utils\RandomGenUtils;
 use OpenEMR\Common\Uuid\UuidRegistry;
+use OpenEMR\FHIR\SMART\SmartLaunchController;
 use OpenIDConnectServer\ClaimExtractor;
 use OpenIDConnectServer\Entities\ClaimSetEntity;
-use OpenIDConnectServer\IdTokenResponse;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Log\LoggerInterface;
@@ -63,11 +64,8 @@ class AuthorizationController
 {
     use CryptTrait;
 
-    public $supportedClaims;
-    public $supportedScopes;
     public $authBaseUrl;
     public $authBaseFullUrl;
-    public $authIssueFullUrl;
     public $siteId;
     private $privateKey;
     private $passphrase;
@@ -86,122 +84,120 @@ class AuthorizationController
 
     public function __construct($providerForm = true)
     {
-        global $gbl;
-        // some static bring forwards
-        $this->siteId = $gbl::$SITE;
-        $this->supportedClaims = $gbl::supportedClaims();
-        $this->supportedScopes = $gbl::supportedScopes();
-        // what would we be if we didn't have Globals...
-        $this->authBaseUrl = $GLOBALS['webroot'] . '/oauth2/' . $_SESSION['site_id'];
+        $gbl = \RestConfig::GetInstance();
+        $this->logger = SystemLogger::instance();
+
+        $this->siteId = $_SESSION['site_id'] ?? $gbl::$SITE;
+        $this->authBaseUrl = $GLOBALS['webroot'] . '/oauth2/' . $this->siteId;
         $this->authBaseFullUrl = self::getAuthBaseFullURL();
-        $this->authIssueFullUrl = $GLOBALS['site_addr_oath'] . $GLOBALS['webroot'];
         // used for session stash
         $this->authRequestSerial = $_SESSION['authRequestSerial'] ?? '';
         // Create a crypto object that will be used for for encryption/decryption
         $this->cryptoGen = new CryptoGen();
-        $this->logger = SystemLogger::instance();
-
-        // encryption key
-        $eKey = sqlQueryNoLog("SELECT `name`, `value` FROM `keys` WHERE `name` = 'oauth2key'");
-        if (!empty($eKey['name']) && ($eKey['name'] === 'oauth2key')) {
-            // collect the encryption key from database
-            $this->oaEncryptionKey = $this->cryptoGen->decryptStandard($eKey['value']);
-            if (empty($this->oaEncryptionKey)) {
-                // if decrypted key is empty, then critical error and must exit
-                error_log("OpenEMR error - oauth2 key was blank after it was decrypted, so forced exit");
-                http_response_code(500);
-                exit;
-            }
-        } else {
-            // create a encryption key and store it in database
-            $this->oaEncryptionKey = RandomGenUtils::produceRandomBytes(32);
-            if (empty($this->oaEncryptionKey)) {
-                // if empty, then force exit
-                error_log("OpenEMR error - random generator broken during oauth2 encryption key generation, so forced exit");
-                http_response_code(500);
-                exit;
-            }
-            $this->oaEncryptionKey = base64_encode($this->oaEncryptionKey);
-            if (empty($this->oaEncryptionKey)) {
-                // if empty, then force exit
-                error_log("OpenEMR error - base64 encoding broken during oauth2 encryption key generation, so forced exit");
-                http_response_code(500);
-                exit;
-            }
-            sqlStatementNoLog("INSERT INTO `keys` (`name`, `value`) VALUES ('oauth2key', ?)", [$this->cryptoGen->encryptStandard($this->oaEncryptionKey)]);
-        }
-
-        // private key
+        // verify and/or setup our key pairs.
         $this->privateKey = $GLOBALS['OE_SITE_DIR'] . '/documents/certificates/oaprivate.key';
         $this->publicKey = $GLOBALS['OE_SITE_DIR'] . '/documents/certificates/oapublic.key';
-        if (!file_exists($this->privateKey)) {
-            // create the private/public key pair (store in filesystem) with a random passphrase (store in database)
-            // first, create the passphrase (removing any prior passphrases)
-            sqlStatementNoLog("DELETE FROM `keys` WHERE `name` = 'oauth2passphrase'");
-            $this->passphrase = RandomGenUtils::produceRandomString(60, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789");
-            if (empty($this->passphrase)) {
-                // if empty, then force exit
-                error_log("OpenEMR error - random generator broken during oauth2 key passphrase generation, so forced exit");
-                http_response_code(500);
-                exit;
-            }
-            // second, create and store the private/public key pair
-            $keysConfig = [
-                "default_md" => "sha256",
-                "private_key_type" => OPENSSL_KEYTYPE_RSA,
-                "private_key_bits" => 2048,
-                "encrypt_key" => true,
-                "encrypt_key_cipher" => OPENSSL_CIPHER_AES_256_CBC
-            ];
-            $keys = \openssl_pkey_new($keysConfig);
-            if ($keys === false) {
-                // if unable to create keys, then force exit
-                error_log("OpenEMR error - key generation broken during oauth2, so forced exit");
-                http_response_code(500);
-                exit;
-            }
-            $privkey = '';
-            openssl_pkey_export($keys, $privkey, $this->passphrase, $keysConfig);
-            $pubkey = openssl_pkey_get_details($keys);
-            $pubkey = $pubkey["key"];
-            if (empty($privkey) || empty($pubkey)) {
-                // if unable to construct keys, then force exit
-                error_log("OpenEMR error - key construction broken during oauth2, so forced exit");
-                http_response_code(500);
-                exit;
-            }
-            // third, store the keys on drive and store the passphrase in the database
-            file_put_contents($this->privateKey, $privkey);
-            chmod($this->privateKey, 0640);
-            file_put_contents($this->publicKey, $pubkey);
-            chmod($this->publicKey, 0660);
-            sqlStatementNoLog("INSERT INTO `keys` (`name`, `value`) VALUES ('oauth2passphrase', ?)", [$this->cryptoGen->encryptStandard($this->passphrase)]);
-        }
-        // confirm existence of passphrase
-        $pkey = sqlQueryNoLog("SELECT `name`, `value` FROM `keys` WHERE `name` = 'oauth2passphrase'");
-        if (!empty($pkey['name']) && ($pkey['name'] == 'oauth2passphrase')) {
-            $this->passphrase = $this->cryptoGen->decryptStandard($pkey['value']);
-            if (empty($this->passphrase)) {
-                // if decrypted pssphrase is empty, then critical error and must exit
-                error_log("OpenEMR error - oauth2 passphrase was blank after it was decrypted, so forced exit");
-                http_response_code(500);
-                exit;
-            }
-        } else {
-            // oauth2passphrase is missing so must exit
-            error_log("OpenEMR error - oauth2 passphrase is missing, so forced exit");
-            http_response_code(500);
-            exit;
-        }
-        // confirm existence of key pair
-        if (!file_exists($this->privateKey) || !file_exists($this->publicKey)) {
-            // key pair is missing so must exit
-            error_log("OpenEMR error - oauth2 keypair is missing, so forced exit");
-            http_response_code(500);
-            exit;
-        }
-
+        $this->configKeyPairs();
+        // true will display client/user server sign in. false, not.
         $this->providerForm = $providerForm;
+    }
+
+    private function configKeyPairs(): void
+    {
+        $response = $this->createServerResponse();
+        try {
+            // encryption key
+            $eKey = sqlQueryNoLog("SELECT `name`, `value` FROM `keys` WHERE `name` = 'oauth2key'");
+            if (!empty($eKey['name']) && ($eKey['name'] === 'oauth2key')) {
+                // collect the encryption key from database
+                $this->oaEncryptionKey = $this->cryptoGen->decryptStandard($eKey['value']);
+                if (empty($this->oaEncryptionKey)) {
+                    // if decrypted key is empty, then critical error and must exit
+                    $this->logger->error("OpenEMR error - oauth2 key was blank after it was decrypted, so forced exit");
+                    throw OAuthServerException::serverError("Security error - problem with authorization server keys.");
+                }
+            } else {
+                // create a encryption key and store it in database
+                $this->oaEncryptionKey = RandomGenUtils::produceRandomBytes(32);
+                if (empty($this->oaEncryptionKey)) {
+                    // if empty, then force exit
+                    $this->logger->error("OpenEMR error - random generator broken during oauth2 encryption key generation, so forced exit");
+                    throw OAuthServerException::serverError("Security error - problem with authorization server keys.");
+                }
+                $this->oaEncryptionKey = base64_encode($this->oaEncryptionKey);
+                if (empty($this->oaEncryptionKey)) {
+                    // if empty, then force exit
+                    $this->logger->error("OpenEMR error - base64 encoding broken during oauth2 encryption key generation, so forced exit");
+                    throw OAuthServerException::serverError("Security error - problem with authorization server keys.");
+                }
+                sqlStatementNoLog("INSERT INTO `keys` (`name`, `value`) VALUES ('oauth2key', ?)", [$this->cryptoGen->encryptStandard($this->oaEncryptionKey)]);
+            }
+            // private key
+            if (!file_exists($this->privateKey)) {
+                // create the private/public key pair (store in filesystem) with a random passphrase (store in database)
+                // first, create the passphrase (removing any prior passphrases)
+                sqlStatementNoLog("DELETE FROM `keys` WHERE `name` = 'oauth2passphrase'");
+                $this->passphrase = RandomGenUtils::produceRandomString(60, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789");
+                if (empty($this->passphrase)) {
+                    // if empty, then force exit
+                    $this->logger->error("OpenEMR error - random generator broken during oauth2 key passphrase generation, so forced exit");
+                    throw OAuthServerException::serverError("Security error - problem with authorization server keys.");
+                }
+                // second, create and store the private/public key pair
+                $keysConfig = [
+                    "default_md" => "sha256",
+                    "private_key_type" => OPENSSL_KEYTYPE_RSA,
+                    "private_key_bits" => 2048,
+                    "encrypt_key" => true,
+                    "encrypt_key_cipher" => OPENSSL_CIPHER_AES_256_CBC
+                ];
+                $keys = \openssl_pkey_new($keysConfig);
+                if ($keys === false) {
+                    // if unable to create keys, then force exit
+                    $this->logger->error("OpenEMR error - key generation broken during oauth2, so forced exit");
+                    throw OAuthServerException::serverError("Security error - problem with authorization server keys.");
+                }
+                $privkey = '';
+                openssl_pkey_export($keys, $privkey, $this->passphrase, $keysConfig);
+                $pubkey = openssl_pkey_get_details($keys);
+                $pubkey = $pubkey["key"];
+                if (empty($privkey) || empty($pubkey)) {
+                    // if unable to construct keys, then force exit
+                    $this->logger->error("OpenEMR error - key construction broken during oauth2, so forced exit");
+                    throw OAuthServerException::serverError("Security error - problem with authorization server keys.");
+                }
+                // third, store the keys on drive and store the passphrase in the database
+                file_put_contents($this->privateKey, $privkey);
+                chmod($this->privateKey, 0640);
+                file_put_contents($this->publicKey, $pubkey);
+                chmod($this->publicKey, 0660);
+                sqlStatementNoLog("INSERT INTO `keys` (`name`, `value`) VALUES ('oauth2passphrase', ?)", [$this->cryptoGen->encryptStandard($this->passphrase)]);
+            }
+            // confirm existence of passphrase
+            $pkey = sqlQueryNoLog("SELECT `name`, `value` FROM `keys` WHERE `name` = 'oauth2passphrase'");
+            if (!empty($pkey['name']) && ($pkey['name'] == 'oauth2passphrase')) {
+                $this->passphrase = $this->cryptoGen->decryptStandard($pkey['value']);
+                if (empty($this->passphrase)) {
+                    // if decrypted pssphrase is empty, then critical error and must exit
+                    $this->logger->error("OpenEMR error - oauth2 passphrase was blank after it was decrypted, so forced exit");
+                    throw OAuthServerException::serverError("Security error - problem with authorization server keys.");
+                }
+            } else {
+                // oauth2passphrase is missing so must exit
+                $this->logger->error("OpenEMR error - oauth2 passphrase is missing, so forced exit");
+                throw OAuthServerException::serverError("Security error - problem with authorization server keys.");
+            }
+            // confirm existence of key pair
+            if (!file_exists($this->privateKey) || !file_exists($this->publicKey)) {
+                // key pair is missing so must exit
+                $this->logger->error("OpenEMR error - oauth2 keypair is missing, so forced exit");
+                throw OAuthServerException::serverError("Security error - problem with authorization server keys.");
+            }
+        } catch (OAuthServerException $exception) {
+            SessionUtil::oauthSessionCookieDestroy();
+            $this->emitResponse($exception->generateHttpResponse($response));
+            exit;
+        }
     }
 
     public function clientRegistration(): void
@@ -242,7 +238,7 @@ class AuthorizationController
                 'default_max_age' => null,
                 'require_auth_time' => null,
                 'default_acr_values' => null,
-                'initiate_login_uri' => null,
+                'initiate_login_uri' => null, // for anything with a SMART 'launch/ehr' context we need to know how to initiate the login
                 'request_uris' => null,
                 'response_types' => null,
                 'grant_types' => null,
@@ -260,11 +256,14 @@ class AuthorizationController
                 'registration_access_token' => $reg_token,
                 'registration_client_uri_path' => $reg_client_uri_path
             );
+
+            $params['client_role'] = 'patient';
             // only include secret if a confidential app else force PKCE for native and web apps.
             $client_secret = '';
             if ($data['application_type'] === 'private') {
                 $client_secret = $this->base64url_encode(RandomGenUtils::produceRandomBytes(64));
                 $params['client_secret'] = $client_secret;
+                $params['client_role'] = 'user';
             }
             foreach ($keys as $key => $supported_values) {
                 if (isset($data[$key])) {
@@ -290,7 +289,7 @@ class AuthorizationController
             }
             // save to oauth client table
             $badSave = $this->newClientSave($client_id, $params);
-            if ($badSave) {
+            if (!empty($badSave)) {
                 throw OAuthServerException::serverError("Try again. Unable to create account");
             }
             $reg_uri = $this->authBaseFullUrl . '/client/' . $reg_client_uri_path;
@@ -322,8 +321,8 @@ class AuthorizationController
             $body = $response->getBody();
             $body->write(json_encode(array_merge($client_json, $params)));
 
-            $this->emitResponse($response->withStatus(200)->withBody($body));
             SessionUtil::oauthSessionCookieDestroy();
+            $this->emitResponse($response->withStatus(200)->withBody($body));
         } catch (OAuthServerException $exception) {
             SessionUtil::oauthSessionCookieDestroy();
             $this->emitResponse($exception->generateHttpResponse($response));
@@ -362,7 +361,9 @@ class AuthorizationController
     {
         $user = $_SESSION['authUserID'] ?? null; // future use for provider client.
         $site = $this->siteId;
-        $private = empty($info['client_secret']) ? 0 : 1;
+        $is_confidential_client = empty($info['client_secret']) ? 0 : 1;
+        // we do not allow a confidential app to be enabled by default;
+        $is_client_enabled = $is_confidential_client ? 0 : 1;
         $contacts = $info['contacts'];
         $redirects = $info['redirect_uris'];
         $logout_redirect_uris = $info['post_logout_redirect_uris'] ?? null;
@@ -374,6 +375,13 @@ class AuthorizationController
         // TODO: adunsulag do we need to reject the registration if there are certain scopes here we do not support
         // TODO: adunsulag should we check these scopes against our '$this->supportedScopes'?
         $info['scope'] = $info['scope'] ?? 'openid email phone address api:oemr api:fhir api:port api:pofh';
+
+        // if a public app requests the launch scope we also do not let them through unless they've been manually
+        // authorized by an administrator user.
+        if ($is_client_enabled) {
+            $is_client_enabled = strpos($info['scope'], SmartLaunchController::CLIENT_APP_REQUIRED_LAUNCH_SCOPE) !== false ? 0 : 1;
+        }
+
         // encrypt the client secret
         if (!empty($info['client_secret'])) {
             $info['client_secret'] = $this->cryptoGen->encryptStandard($info['client_secret']);
@@ -381,10 +389,10 @@ class AuthorizationController
 
 
         try {
-            $sql = "INSERT INTO `oauth_clients` (`client_id`, `client_role`, `client_name`, `client_secret`, `registration_token`, `registration_uri_path`, `register_date`, `revoke_date`, `contacts`, `redirect_uri`, `grant_types`, `scope`, `user_id`, `site_id`, `is_confidential`, `logout_redirect_uris`, `jwks_uri`, `jwks`, `initiate_login_uri`, `endorsements`, `policy_uri`, `tos_uri`) VALUES (?, ?, ?, ?, ?, ?, NOW(), NULL, ?, ?, 'authorization_code', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            $sql = "INSERT INTO `oauth_clients` (`client_id`, `client_role`, `client_name`, `client_secret`, `registration_token`, `registration_uri_path`, `register_date`, `revoke_date`, `contacts`, `redirect_uri`, `grant_types`, `scope`, `user_id`, `site_id`, `is_confidential`, `logout_redirect_uris`, `jwks_uri`, `jwks`, `initiate_login_uri`, `endorsements`, `policy_uri`, `tos_uri`, `is_enabled`) VALUES (?, ?, ?, ?, ?, ?, NOW(), NULL, ?, ?, 'authorization_code', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
             $i_vals = array(
                 $clientId,
-                'users',
+                $info['client_role'],
                 $info['client_name'],
                 $info['client_secret'],
                 $info['registration_access_token'],
@@ -394,14 +402,15 @@ class AuthorizationController
                 $info['scope'],
                 $user,
                 $site,
-                $private,
+                $is_confidential_client,
                 $logout_redirect_uris,
-                $info['jwks_uri'],
-                $info['jwks'],
-                $info['initiate_login_uri'],
-                $info['endorsements'],
-                $info['policy_uri'],
-                $info['tos_uri']
+                ($info['jwks_uri'] ?? null),
+                ($info['jwks'] ?? null),
+                ($info['initiate_login_uri'] ?? null),
+                ($info['endorsements'] ?? null),
+                ($info['policy_uri'] ?? null),
+                ($info['tos_uri'] ?? null),
+                $is_client_enabled
             );
 
             return sqlQueryNoLog($sql, $i_vals);
@@ -467,15 +476,15 @@ class AuthorizationController
             $body = $response->getBody();
             $body->write(json_encode($params));
 
-            $this->emitResponse($response->withStatus(200)->withBody($body));
             SessionUtil::oauthSessionCookieDestroy();
+            $this->emitResponse($response->withStatus(200)->withBody($body));
         } catch (OAuthServerException $exception) {
             SessionUtil::oauthSessionCookieDestroy();
             $this->emitResponse($exception->generateHttpResponse($response));
         }
     }
 
-    public function getBearerToken()
+    public function getBearerToken(): string
     {
         $request = $this->createServerRequest();
         $request_headers = $request->getHeaders();
@@ -487,12 +496,12 @@ class AuthorizationController
         if ($authorization) {
             $pieces = explode(' ', $authorization);
             if (strcasecmp($pieces[0], 'bearer') !== 0) {
-                return null;
+                return "";
             }
 
             return rtrim($pieces[1]);
         }
-        return null;
+        return "";
     }
 
     public function oauthAuthorizationFlow(): void
@@ -513,13 +522,13 @@ class AuthorizationController
             // Validate the HTTP request and return an AuthorizationRequest object.
             $this->logger->debug("AuthorizationController->oauthAuthorizationFlow() attempting to validate auth request");
             $authRequest = $server->validateAuthorizationRequest($request);
+            $this->logger->debug("AuthorizationController->oauthAuthorizationFlow() auth request validated, csrf,scopes,client_id setup");
             $_SESSION['csrf'] = $authRequest->getState();
             $_SESSION['scopes'] = $request->getQueryParams()['scope'];
             $_SESSION['client_id'] = $request->getQueryParams()['client_id'];
-            $_SESSION['launch'] = $request->getQueryParams()['launch'];
+            $_SESSION['client_role'] = $authRequest->getClient()->getClientRole();
+            $_SESSION['launch'] = $request->getQueryParams()['launch'] ?? null;
             $this->logger->debug("AuthorizationController->oauthAuthorizationFlow() session updated", ['session' => $_SESSION]);
-
-            $this->logger->debug("AuthorizationController->oauthAuthorizationFlow() auth request validated, csrf,scopes,client_id setup");
             // If needed, serialize into a users session
             if ($this->providerForm) {
                 $this->serializeUserSession($authRequest, $request);
@@ -543,20 +552,15 @@ class AuthorizationController
 
     public function getAuthorizationServer(): AuthorizationServer
     {
-        // This seems clumsy to me still, gets job done for now...
-        // It is possible to receive a scope where the claim would need a value.
-        // Can be turned off in discovery with claims_parameter_supported but unsure if smart needs.
-        // TODO: Needs further verification.
         $protectedClaims = ['profile', 'email', 'address', 'phone'];
+        $scopeRepository = new ScopeRepository();
+        $claims = $scopeRepository->getSupportedClaims();
         $customClaim = [];
-        foreach ($this->supportedScopes as $scope) {
-            if (!in_array($scope, $this->supportedClaims, true)) {
+        foreach ($claims as $claim) {
+            if (in_array($claim, $protectedClaims, true)) {
                 continue;
             }
-            if (in_array($scope, $protectedClaims, true)) {
-                continue;
-            }
-            $customClaim[] = new ClaimSetEntity((string)$scope, [(string)$scope]);
+            $customClaim[] = new ClaimSetEntity($claim, [$claim]);
         }
         if (!empty($_SESSION['nonce'])) {
             // nonce scope added later. this is for id token nonce claim.
@@ -592,7 +596,7 @@ class AuthorizationController
             );
         }
         if ($this->grantType === 'refresh_token') {
-            $grant = new RefreshTokenGrant(new refreshTokenRepository());
+            $grant = new CustomRefreshTokenGrant(new refreshTokenRepository());
             $grant->setRefreshTokenTTL(new \DateInterval('P3M'));
             $authServer->enableGrantType(
                 $grant,
@@ -657,6 +661,8 @@ class AuthorizationController
     {
         $response = $this->createServerResponse();
 
+        $patientRoleSupport = (!empty($GLOBALS['rest_portal_api']) || !empty($GLOBALS['rest_portal_fhir_api']));
+
         if (empty($_POST['username']) && empty($_POST['password'])) {
             $this->logger->debug("AuthorizationController->userLogin() presenting blank login form");
             $oauthLogin = true;
@@ -677,7 +683,7 @@ class AuthorizationController
                 exit();
             } else {
                 $this->logger->debug("AuthorizationController->userLogin() verifying login information");
-                $continueLogin = $this->verifyLogin($_POST['username'], $_POST['password'], $_POST['email'], $_POST['user_role']);
+                $continueLogin = $this->verifyLogin($_POST['username'], $_POST['password'], ($_POST['email'] ?? ''), $_POST['user_role']);
                 $this->logger->debug("AuthorizationController->userLogin() verifyLogin result", ["continueLogin" => $continueLogin]);
             }
         }
@@ -693,9 +699,9 @@ class AuthorizationController
             $this->logger->debug("AuthorizationController->userLogin() login valid, continuing oauth process");
         }
 
-        //Require MFA if turn on, currently support only TOTP method
+        //Require MFA if turned on
         $mfa = new MfaUtils($this->userId);
-        $mfaToken = $mfa->tokenFromRequest($_POST['mfa_type']);
+        $mfaToken = $mfa->tokenFromRequest($_POST['mfa_type'] ?? null);
         $mfaType = $mfa->getType();
         $TOTP = MfaUtils::TOTP;
         $U2F = MfaUtils::U2F;
@@ -744,7 +750,7 @@ class AuthorizationController
         }
         if ($this->userId = $auth->getUserId()) {
             $_SESSION['user_id'] = $this->getUserUuid($this->userId, 'users');
-            $this->logger->debug("AuthorizationController->verifyLogin() user login", ['pid' => $_SESSION['pid']]);
+            $this->logger->debug("AuthorizationController->verifyLogin() user login", ['pid' => $_SESSION['user_id']]);
             return true;
         }
         if ($id = $auth->getPatientId()) {
@@ -817,8 +823,8 @@ class AuthorizationController
             }
             // Return the HTTP redirect response. Redirect is to client callback.
             $this->logger->debug("AuthorizationController->authorizeUser() sending server response");
-            $this->emitResponse($result);
             SessionUtil::oauthSessionCookieDestroy();
+            $this->emitResponse($result);
             exit;
         } catch (Exception $exception) {
             $this->logger->error("AuthorizationController->authorizeUser() Exception thrown", ["message" => $exception->getMessage()]);
@@ -881,14 +887,6 @@ class AuthorizationController
             $_SESSION = json_decode($ssbc['session_cache'], true);
         }
         if ($this->grantType === 'refresh_token') {
-            // Adding site to POSTs scope then re-init PSR request to include.
-            // This is usually done in ScopeRepository finalizeScopes() method!
-            // which is not called for a refresh/access token swap.
-            if (!empty($_POST['scope'])) {
-                $_POST['scope'] .= (" site:" . $_SESSION['site_id']);
-            } else {
-                $_POST['scope'] = (" site:" . $_SESSION['site_id']);
-            }
             $request = $this->createServerRequest();
         }
         // Finally time to init the server.
@@ -896,10 +894,9 @@ class AuthorizationController
         try {
             if (($this->grantType === 'authorization_code') && empty($_SESSION['csrf'])) {
                 // the saved session was not populated as expected
-                throw OAuthServerException::serverError("This session doesn't pass security");
+                throw new OAuthServerException('Bad request', 0, 'invalid_request', 400);
             }
             $result = $server->respondToAccessTokenRequest($request, $response);
-            $this->emitResponse($result);
             // save a password trusted user
             if ($this->grantType === 'password') {
                 $body = $result->getBody();
@@ -911,10 +908,11 @@ class AuthorizationController
                 $this->saveTrustedUser($_REQUEST['client_id'], $_SESSION['pass_user_id'], $_REQUEST['scope'], 0, $code, $session_cache, 'password');
             }
             SessionUtil::oauthSessionCookieDestroy();
+            $this->emitResponse($result);
         } catch (OAuthServerException $exception) {
-            $this->logger->error(
+            $this->logger->debug(
                 "AuthorizationController->oauthAuthorizeToken() OAuthServerException occurred",
-                ["message" => $exception->getMessage()]
+                ["message" => $exception->getMessage(), "stack" => $exception->getTraceAsString()]
             );
             SessionUtil::oauthSessionCookieDestroy();
             $this->emitResponse($exception->generateHttpResponse($response));

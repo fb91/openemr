@@ -14,12 +14,14 @@
  * @license   https://github.com/openemr/openemr/blob/master/LICENSE GNU General Public License 3
  */
 
+// below brings in autoloader
 require_once("./../_rest_config.php");
 
 use OpenEMR\Common\Auth\UuidUserAccount;
 use OpenEMR\Common\Csrf\CsrfUtils;
 use OpenEMR\Common\Http\HttpRestRouteHandler;
 use OpenEMR\Common\Logging\SystemLogger;
+use OpenEMR\Common\Session\SessionUtil;
 use OpenEMR\Events\RestApiExtend\RestApiCreateEvent;
 use Psr\Http\Message\ResponseInterface;
 
@@ -66,6 +68,7 @@ if (!empty($_SERVER['HTTP_APICSRFTOKEN'])) {
     // collect site
     $site = '';
     $scopes = $attributes['oauth_scopes'];
+    $logger->debug("Parsed oauth_scopes in AccessToken", ["scopes" => $scopes]);
     foreach ($scopes as $attr) {
         if (stripos($attr, 'site:') !== false) {
             $site = str_replace('site:', '', $attr);
@@ -81,6 +84,9 @@ if (!empty($_SERVER['HTTP_APICSRFTOKEN'])) {
     }
     // set the site
     $_GET['site'] = $site;
+
+    // set the scopes globals for endpoint permission checking
+    $GLOBALS['oauth_scopes'] = $scopes;
 
     // collect openemr user uuid
     $userId = $attributes['oauth_user_id'];
@@ -101,13 +107,20 @@ if (!empty($_SERVER['HTTP_APICSRFTOKEN'])) {
     $ignoreAuth = true;
 }
 
+if (!$isLocalApi) {
+    // Will start the api OpenEMR session/cookie.
+    SessionUtil::apiSessionStart($gbl::$web_root);
+}
+
 $GLOBALS['is_local_api'] = $isLocalApi;
 
 // Set $sessionAllowWrite to true here for following reasons:
-//  1. !$isLocalApi - in this case setting sessions far downstream and no benefit to set to false since single process
+//  1. !$isLocalApi - not applicable since use the SessionUtil::apiSessionStart session, which was set above
 //  2. $isLocalApi - in this case, basically setting this to true downstream after some session sets via session_write_close() call
 $sessionAllowWrite = true;
 require_once("./../interface/globals.php");
+
+$gbl::$apisBaseFullUrl = $GLOBALS['site_addr_oath'] . $GLOBALS['webroot'] . "/apis/" . $gbl::$SITE;
 
 if ($isLocalApi) {
     // need to check for csrf match when using api locally
@@ -171,6 +184,18 @@ if ($isLocalApi) {
         $logger->error("OpenEMR Error - api user role for user could not be identified, so forced exit");
         $gbl::destroySession();
         http_response_code(400);
+        exit();
+    }
+    // verify that the scope covers the route
+    if (
+        ($gbl::is_api_request($resource) && !in_array('api:oemr', $GLOBALS['oauth_scopes'])) ||
+        ($gbl::is_fhir_request($resource) && !(in_array('api:fhir', $GLOBALS['oauth_scopes']) || in_array('fhirUser', $GLOBALS['oauth_scopes']))) ||
+        ($gbl::is_portal_request($resource) && !in_array('api:port', $GLOBALS['oauth_scopes'])) ||
+        ($gbl::is_portal_fhir_request($resource) && !(in_array('api:pofh', $GLOBALS['oauth_scopes']) || in_array('fhirUser', $GLOBALS['oauth_scopes'])))
+    ) {
+        $logger->error("dispatch.php api call with token that does not cover the requested route");
+        $gbl::destroySession();
+        http_response_code(401);
         exit();
     }
     // ensure user role has access to the resource
@@ -295,12 +320,20 @@ if ($isLocalApi) {
     session_write_close();
 }
 
-// dispatch $routes called by ref.
+// dispatch $routes called by ref (note storing the output in a variable to allow option
+//  to destroy the session/cookie before sending the output back)
+ob_start();
 $hasRoute = HttpRestRouteHandler::dispatch($routes, $resource, $_SERVER["REQUEST_METHOD"]);
+$apiCallOutput = ob_get_clean();
 // Tear down session for security.
 if (!$isLocalApi) {
     $gbl::destroySession();
 }
+// Send the output if not empty
+if (!empty($apiCallOutput)) {
+    echo $apiCallOutput;
+}
+
 // prevent 200 if route doesn't exist
 if (!$hasRoute) {
     $logger->debug("dispatch.php no route found for resource", ['resource' => $resource]);

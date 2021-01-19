@@ -29,6 +29,11 @@ use OpenEMR\Services\FacilityService;
 $ignoreAuth = true;
 require_once("../globals.php");
 
+// exit if fhir api is not turned on
+if (empty($GLOBALS['rest_fhir_api']) && empty($GLOBALS['rest_portal_fhir_api'])) {
+    die(xlt("Not Authorized"));
+}
+
 // This code allows configurable positioning in the login page
 $loginrow = "row login-row align-items-center m-5";
 
@@ -68,6 +73,7 @@ $fhirRegisterURL = AuthorizationController::getAuthBaseFullURL() . Authorization
                 let appRegister = {
                     "application_type": "private"
                     ,"redirect_uris": []
+                    ,"initiate_login_uri": ""
                     ,"post_logout_redirect_uris": []
                     ,"client_name": ""
                     ,"token_endpoint_auth_method": "client_secret_post"
@@ -79,6 +85,7 @@ $fhirRegisterURL = AuthorizationController::getAuthBaseFullURL() . Authorization
                 appRegister.redirect_uris.push(redirect_uri);
                 // not sure we need logout redirect right now
                 appRegister.post_logout_redirect_uris.push(document.querySelector("#logoutURI").value);
+                appRegister.initiate_login_uri = document.querySelector("#launchUri").value;
                 appRegister.contacts.push(document.querySelector("#contactEmail").value);
 
                 fetch(fhirRegistrationURL, {
@@ -97,6 +104,7 @@ $fhirRegisterURL = AuthorizationController::getAuthBaseFullURL() . Authorization
                     document.querySelector(".apiResponse").classList.remove("hidden");
                     document.querySelector(".errorResponse").classList.add("hidden");
                     document.querySelector("#clientID").value = resultJSON.client_id;
+                    document.querySelector("#clientSecretID").value = resultJSON.client_secret;
                 })
                 .catch(error => {
                     console.error(error);
@@ -134,16 +142,26 @@ $fhirRegisterURL = AuthorizationController::getAuthBaseFullURL() . Authorization
                 <input type="text" class="form-control" id="redirectUri" name="redirectUri" placeholder="<?php echo xla('URI'); ?>" />
             </div>
             <div class="form-group">
+                <label for="launchUri" class="text-right"><?php echo xlt('App Launch URI'); ?>:</label>
+                <input type="text" class="form-control" id="launchUri" name="launchUri" placeholder="<?php echo xla('URI'); ?>" />
+            </div>
+            <div class="form-group">
                 <label for="logoutURI" class="text-right"><?php echo xlt('App Logout URI'); ?>:</label>
                 <input type="text" class="form-control" id="logoutURI" name="logoutURI" placeholder="<?php echo xla('URI'); ?>" />
             </div>
             <!-- TODO: adunsulag display the list of scopes that can be requested here -->
             <div class="form-group">
-                <input type="button" class="form-control btn btn-primary" id="submit" name="submit" value="Submit" (onClick)="registerApp();" />
+                <input type="button" class="form-control btn btn-primary" id="submit" name="submit" value="<?php echo xla('Submit'); ?>" (onClick)="registerApp();" />
             </div>
-            <div class="form-group apiResponse hidden">
-                <label for="clientID" class="text-right"><?php echo xlt('Client APP ID:'); ?></label>
-                <textarea class="form-control" id="clientID" name="clientID"></textarea>
+            <div class="apiResponse hidden">
+                <div class="form-group">
+                    <label for="clientID" class="text-right"><?php echo xlt('Client APP ID:'); ?></label>
+                    <textarea class="form-control" id="clientID" name="clientID"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="clientSecretID" class="text-right"><?php echo xlt('Client Secret APP ID:'); ?></label>
+                    <textarea class="form-control" id="clientSecretID" name="clientSecretID"></textarea>
+                </div>
             </div>
             <div class="form-group errorResponse hidden">
                 <div id="errorResponseContainer">

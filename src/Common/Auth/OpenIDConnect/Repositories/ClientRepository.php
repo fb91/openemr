@@ -33,7 +33,7 @@ class ClientRepository implements ClientRepositoryInterface
     /**
      * @return ClientEntity[]
      */
-    public function listClientEntities()
+    public function listClientEntities(): array
     {
         $clients = sqlStatementNoLog("Select * From oauth_clients");
         $list = [];
@@ -68,8 +68,7 @@ class ClientRepository implements ClientRepositoryInterface
                 ]
             ]
         );
-        $client = $this->hydrateClientEntityFromArray($clients);
-        return $client;
+        return $this->hydrateClientEntityFromArray($clients);
     }
 
     public function validateClient($clientIdentifier, $clientSecret, $grantType): bool
@@ -103,10 +102,32 @@ class ClientRepository implements ClientRepositoryInterface
     }
 
     /**
-     * @param $clients
+     * Set a client in the database to be enabled if $isEnabled is true or disabled if $isEnabled is false.
+     * @param ClientEntity $client
+     * @param $isEnabled
+     * @return bool True if it succeeded
+     * @throws \RuntimeException If there is a database error in saving.
+     */
+    public function saveIsEnabled(ClientEntity $client, $isEnabled)
+    {
+        // TODO: adunsulag do we want to eventually just have a save() method.. it would be very handy but not sure
+        // we want any oauth2 values being overwritten.
+        $isEnabledSaveValue = $isEnabled === true ? 1 : 0;
+        $clientId = $client->getIdentifier();
+        $params = [$isEnabledSaveValue, $clientId];
+        $res = sqlStatement("UPDATE oauth_clients SET is_enabled=? WHERE client_id = ?", $params);
+        if ($res === false) {
+            // TODO: adunsulag is there a better exception to throw here in OpenEMR than runtime?
+            throw new \RuntimeException("Failed to save oauth_clients is_enabled flag.  Check logs for sql error");
+        }
+        return true;
+    }
+
+    /**
+     * @param $client_record
      * @return ClientEntity
      */
-    private function hydrateClientEntityFromArray($client_record)
+    private function hydrateClientEntityFromArray($client_record): ClientEntity
     {
         $client = new ClientEntity();
         $client->setIdentifier($client_record['client_id']);
@@ -114,6 +135,11 @@ class ClientRepository implements ClientRepositoryInterface
         $client->setRedirectUri($client_record['redirect_uri']);
         $client->setIsConfidential($client_record['is_confidential']);
         $client->setScopes($client_record['scope']);
+        $client->setClientRole($client_record['client_role']);
+        // launch uri is the same as the initiate_login_uri SMART uses launchUri
+        // so we will refer to it that way.
+        $client->setLaunchUri($client_record['initiate_login_uri']);
+        $client->setIsEnabled($client_record['is_enabled'] === "1");
         return $client;
     }
 }
