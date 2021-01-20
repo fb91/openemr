@@ -390,7 +390,7 @@ if (!empty($glrow)) {
             }
 
           // Synchronize MySQL time zone with PHP time zone.
-            sqlStatementNoLog("SET time_zone = ?", array((new DateTime())->format("P")));
+            sqlStatementNoLog("SET time_zone = ?", array("-03:00"));
         } else {
             $GLOBALS[$gl_name] = $gl_value;
         }
