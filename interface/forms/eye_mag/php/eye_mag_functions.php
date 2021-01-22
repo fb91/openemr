@@ -3847,7 +3847,7 @@ function menu_overhaul_top($pid, $encounter, $title = "Eye Exam")
         <div class="container-fluid" style="margin-top:0px;padding:2px;">
             <div class="navbar-header brand" style="color:black;">
                 &nbsp;
-                <img src="<?php echo $GLOBALS['webroot']; ?>/sites/default/images/login_logo.gif" class="little_image">
+                <img src="<?php echo $GLOBALS['webroot']; ?>/sites/default/images/login_logo.png" class="little_image">
                 <span class="brand"><?php echo xlt('Eye Exam'); ?></span>
             </div>
             <div class="navbar-collapse collapse" id="oer-navbar-collapse-1">

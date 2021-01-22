@@ -40,7 +40,7 @@ if ($showit == 'ext') {
         <nav class="navbar navbar-expand-lg navbar-light bg-light">
             <div class="container">
                 <a class="navbar-brand" href="#">
-                    <img src="<?php echo $GLOBALS['webroot']; ?>/sites/default/images/login_logo.gif" width="30" height="30" alt="">
+                    <img src="<?php echo $GLOBALS['webroot']; ?>/sites/default/images/login_logo.png" width="30" height="30" alt="">
                     OpenEMR: Eye Exam <span class="font-weight-bold">Shorthand Help</span>
                 </a>
                 <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbar">
