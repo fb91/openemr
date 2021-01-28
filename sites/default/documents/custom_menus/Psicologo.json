@@ -32,7 +32,7 @@
     "menu_id": "patimg",
     "children": [
       {
-        "label": "Patients",
+        "label": "Patient Finder",
         "menu_id": "fin0",
         "target": "fin",
         "url": "/interface/main/finder/dynamic_finder.php",
@@ -44,7 +44,7 @@
         ]
       },
       {
-        "label": "New/Search",
+        "label": "New Patient",
         "menu_id": "new0",
         "target": "pat",
         "url": "/interface/new/new.php",
