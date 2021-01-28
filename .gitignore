@@ -27,3 +27,7 @@ ccdaservice/node_modules
 
 # testing
 .phpunit.result.cache
+
+# custom
+/sites/default/documents/logs_and_misc/methods
+/sites/default/documents/smarty/*
